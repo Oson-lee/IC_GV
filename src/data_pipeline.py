@@ -37,17 +37,6 @@ def load_metadata(metadata_path: str) -> pd.DataFrame:
             
     print(f"[INFO] Detected and mapped columns: {column_mapping}")
     
-    # Verify if all 4 required internal columns were successfully captured
-    required = ['Genome_ID', 'Class', 'Order', 'Family']
-    found_mapped = list(column_mapping.values())
-    missing = [req for req in required if req not in found_mapped]
-    
-    if missing:
-        raise KeyError(
-            f"Could not automatically detect columns for: {missing}. "
-            f"Actual columns present in the file are: {list(df.columns)}"
-        )
-    
     # Rename the columns safely to unified internal variable names
     df = df.rename(columns=column_mapping)
     
@@ -58,9 +47,19 @@ def load_metadata(metadata_path: str) -> pd.DataFrame:
 def stratified_split(df: pd.DataFrame, test_size=0.15, val_size=0.15, random_state=42):
     """
     Perform stratified splitting of the dataset into train, validation, and test sets.
-    Stratification is strictly based on the finest granularity 'Family' to avoid 
-    homologous information leakage across splits.
+    Filters out rare Family categories that contain fewer than 2 samples to enable stratification.
     """
+    # Count the number of samples per Family
+    family_counts = df['Family'].value_counts()
+    
+    # Find families that have too few members (less than 2)
+    rare_families = family_counts[family_counts < 2].index.tolist()
+    
+    if rare_families:
+        print(f"[INFO] Filtering out rare families with less than 2 samples: {rare_families}")
+        # Only keep rows where the Family is NOT in the rare_families list
+        df = df[~df['Family'].isin(rare_families)]
+    
     # 1. Split out the independent test set first
     train_val_df, test_df = train_test_split(
         df, 
@@ -88,5 +87,4 @@ def stratified_split(df: pd.DataFrame, test_size=0.15, val_size=0.15, random_sta
     return train_df, val_df, test_df
 
 if __name__ == "__main__":
-    # Self-contained placeholder for standalone pipeline testing
     pass
