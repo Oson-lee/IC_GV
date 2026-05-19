@@ -50,7 +50,7 @@ def main():
     
     # --- Configuration ---
     DATA_DIR = "./data"
-    METADATA_PATH = os.path.join(DATA_DIR, "metadata.csv")
+    METADATA_PATH = os.path.join(DATA_DIR, "metadata.xlsx")
     DREP_DIR = os.path.join(DATA_DIR, "drep_genomes")
     MODEL_SAVE_DIR = "./saved_models"
     os.makedirs(MODEL_SAVE_DIR, exist_ok=True)
