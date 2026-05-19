@@ -156,8 +156,18 @@ def main():
     print(f"\n>>> Genome-Level Accuracy (Voting): {acc * 100:.2f}% <<<")
     
     print("\nClassification Report (Family Level):")
-    target_names = label_encoder.classes_
-    print(classification_report(final_y_true, final_y_pred, target_names=target_names, zero_division=0))
+    # Dynamically find which integer classes are actually present in the test true/pred labels
+    present_classes = np.unique(np.concatenate([final_y_true, final_y_pred]))
+    # Map those integer classes back to their true string names
+    target_names = [label_encoder.classes_[i] for i in present_classes]
+    
+    print(classification_report(
+        final_y_true, 
+        final_y_pred, 
+        labels=present_classes,     # <--- Fix: Specify which labels are present
+        target_names=target_names, 
+        zero_division=0
+    ))
     
     # --- Step 6: Save Artifacts ---
     print("\n[Step 6] Saving model and feature extractor...")
