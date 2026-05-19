@@ -3,12 +3,33 @@
 import pandas as pd
 from sklearn.model_selection import train_test_split
 import os
+import re
+
+def clean_taxonomy_string(val):
+    """
+    Cleans complex taxonomic strings like:
+    'NCLDV__Asfuvirales:8(88.89%),ARC__Micrarchaeia:1(11.11%)'
+    and extracts the primary label 'NCLDV__Asfuvirales'.
+    """
+    if pd.isna(val):
+        return val
+    
+    val_str = str(val).strip()
+    
+    # If it contains commas or colons (like prediction outputs), take the first major component
+    if ',' in val_str or ':' in val_str:
+        # Split by comma first to get the first candidate
+        first_candidate = val_str.split(',')[0]
+        # Split by colon to drop the count/percentage part
+        clean_label = first_candidate.split(':')[0].strip()
+        return clean_label
+        
+    return val_str
 
 def load_metadata(metadata_path: str) -> pd.DataFrame:
     """
-    Load the official label metadata table and dynamically map columns
-    by checking for keywords (Class, Order, Family, Isolate ID) to handle 
-    hidden spaces, trailing characters, or unexpected typos in original sheets.
+    Load the official label metadata table, dynamically map columns,
+    and clean complex mixture labels in taxonomic cells.
     """
     if not os.path.exists(metadata_path):
         raise FileNotFoundError(f"Metadata file not found at {metadata_path}")
@@ -24,7 +45,7 @@ def load_metadata(metadata_path: str) -> pd.DataFrame:
     
     # Dynamically scan columns for keywords to protect against hidden characters
     for col in df.columns:
-        col_str = str(col).strip() # Remove any leading/trailing whitespace
+        col_str = str(col).strip()
         
         if 'Isolate ID' in col_str or 'Genome_ID' in col_str:
             column_mapping[col] = 'Genome_ID'
@@ -37,11 +58,24 @@ def load_metadata(metadata_path: str) -> pd.DataFrame:
             
     print(f"[INFO] Detected and mapped columns: {column_mapping}")
     
-    # Rename the columns safely to unified internal variable names
+    # Rename the columns safely
     df = df.rename(columns=column_mapping)
     
     # Filter out rows missing key taxonomic labels using standardized names
     df = df.dropna(subset=['Class', 'Order', 'Family'])
+    
+    # --- CRITICAL CLEANING STEP ---
+    # Apply cleaning to taxonomic columns to ensure they are clean, solid strings
+    print("[INFO] Cleaning messy taxonomy label strings...")
+    df['Class'] = df['Class'].apply(clean_taxonomy_string)
+    df['Order'] = df['Order'].apply(clean_taxonomy_string)
+    df['Family'] = df['Family'].apply(clean_taxonomy_string)
+    
+    # Convert entire column type explicitly to string to satisfy scikit-learn validation
+    df['Class'] = df['Class'].astype(str)
+    df['Order'] = df['Order'].astype(str)
+    df['Family'] = df['Family'].astype(str)
+    
     return df
 
 def stratified_split(df: pd.DataFrame, test_size=0.15, val_size=0.15, random_state=42):
@@ -57,7 +91,6 @@ def stratified_split(df: pd.DataFrame, test_size=0.15, val_size=0.15, random_sta
     
     if rare_families:
         print(f"[INFO] Filtering out rare families with less than 2 samples: {rare_families}")
-        # Only keep rows where the Family is NOT in the rare_families list
         df = df[~df['Family'].isin(rare_families)]
     
     # 1. Split out the independent test set first
@@ -69,7 +102,6 @@ def stratified_split(df: pd.DataFrame, test_size=0.15, val_size=0.15, random_sta
     )
     
     # 2. Split out the validation set from the remaining training data
-    # Calculate the relative proportion of val within the train_val subset
     relative_val_size = val_size / (1.0 - test_size)
     
     train_df, val_df = train_test_split(
