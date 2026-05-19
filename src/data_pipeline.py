@@ -6,27 +6,37 @@ import os
 
 def load_metadata(metadata_path: str) -> pd.DataFrame:
     """
-    Load the official label metadata table supporting both CSV and Excel formats.
+    Load the official label metadata table and map custom column names 
+    to standard names: Genome_ID, Class, Order, Family.
     """
     if not os.path.exists(metadata_path):
         raise FileNotFoundError(f"Metadata file not found at {metadata_path}")
     
-    # Check file extension to choose correct pandas reader
+    # Read Excel or CSV
     if metadata_path.endswith('.xlsx') or metadata_path.endswith('.xls'):
         df = pd.read_excel(metadata_path, engine='openpyxl')
     else:
         df = pd.read_csv(metadata_path)
-        
-    # Filter out rows missing key taxonomic labels
+    
+    # Define the mapping from your Excel columns to standard project columns
+    column_mapping = {
+        'Isolate ID and Taxonomy': 'Genome_ID',
+        'GVClass Taxomomy Predictio': 'Class',
+        'Isolate Order Taxonomy': 'Order',
+        'Isolate Family Taxonomy': 'Family'
+    }
+    
+    # Rename the columns to prevent KeyError
+    df = df.rename(columns=column_mapping)
+    
+    # Filter out rows missing key taxonomic labels using standard names
     df = df.dropna(subset=['Class', 'Order', 'Family'])
     return df
 
 def stratified_split(df: pd.DataFrame, test_size=0.15, val_size=0.15, random_state=42):
     """
     Perform stratified splitting of the dataset into train, validation, and test sets.
-    Stratification is based on the finest granularity 'Family' to ensure even distribution.
     """
-    # 1. Split out the test set first
     train_val_df, test_df = train_test_split(
         df, 
         test_size=test_size, 
@@ -34,8 +44,6 @@ def stratified_split(df: pd.DataFrame, test_size=0.15, val_size=0.15, random_sta
         random_state=random_state
     )
     
-    # 2. Split out the validation set from the remaining data
-    # Calculate the relative proportion of val within train_val
     relative_val_size = val_size / (1.0 - test_size)
     
     train_df, val_df = train_test_split(
