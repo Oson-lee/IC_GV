@@ -6,12 +6,17 @@ import os
 
 def load_metadata(metadata_path: str) -> pd.DataFrame:
     """
-    Load the official label metadata table.
+    Load the official label metadata table supporting both CSV and Excel formats.
     """
     if not os.path.exists(metadata_path):
         raise FileNotFoundError(f"Metadata file not found at {metadata_path}")
     
-    df = pd.read_csv(metadata_path)
+    # Check file extension to choose correct pandas reader
+    if metadata_path.endswith('.xlsx') or metadata_path.endswith('.xls'):
+        df = pd.read_excel(metadata_path, engine='openpyxl')
+    else:
+        df = pd.read_csv(metadata_path)
+        
     # Filter out rows missing key taxonomic labels
     df = df.dropna(subset=['Class', 'Order', 'Family'])
     return df
