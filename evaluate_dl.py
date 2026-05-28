@@ -8,6 +8,8 @@ import torch
 import torch.nn as nn
 from sklearn.preprocessing import LabelEncoder
 from sklearn.metrics import accuracy_score
+import matplotlib.pyplot as plt
+from math import pi
 
 # Import custom modules from the src directory
 from src.data_pipeline import load_metadata, stratified_split
@@ -30,7 +32,6 @@ def evaluate_genome_level_soft_voting(model, model_path, test_df, drep_dir, le_c
     Executes the multi-slice soft-voting inference mechanism on complete, full-length genomes.
     Aggregates slice-level probability distributions via a global mean before final argmax selection.
     """
-    # Load and patch weight tensors safely
     raw_weights = torch.load(model_path, map_location=device)
     cleaned_weights = clean_state_dict_keys(raw_weights)
     model.load_state_dict(cleaned_weights)
@@ -52,7 +53,6 @@ def evaluate_genome_level_soft_voting(model, model_path, test_df, drep_dir, le_c
             genome_id = str(row['Genome_ID']).strip()
             short_id = genome_id.split()[0]
             
-            # Match genomic FASTA files under raw dataset naming anomalies
             target_file = None
             for ext in ['.fna', '.fasta', '.fa']:
                 if f"{short_id}{ext}" in available_files:
@@ -69,13 +69,10 @@ def evaluate_genome_level_soft_voting(model, model_path, test_df, drep_dir, le_c
                 continue
                 
             fasta_path = os.path.join(drep_dir, target_file)
-            
-            # Execute slicing (Standard test evaluation window and stride settings)
             slices = process_fasta_file(fasta_path, window_size=max_len, stride=5000)
             if len(slices) == 0:
                 continue
                 
-            # Pack all biological slices from the single genome into a unified batch tensor
             tensor_list = []
             for chunk in slices:
                 token_ids = [vocab.get(base, 4) for base in chunk[:max_len]]
@@ -85,21 +82,16 @@ def evaluate_genome_level_soft_voting(model, model_path, test_df, drep_dir, le_c
                 
             genome_batch = torch.tensor(tensor_list, dtype=torch.long).to(device)
             
-            # Forward prediction with automatic mixed precision compatibility
             with torch.amp.autocast(device_type='cuda', dtype=torch.bfloat16 if torch.cuda.is_available() else torch.float16):
                 out_c, out_o, out_f = model(genome_batch)
-                
-                # Apply Softmax to translate logits into standard probability vectors
                 prob_c = torch.softmax(out_c, dim=-1).mean(dim=0)
                 prob_o = torch.softmax(out_o, dim=-1).mean(dim=0)
                 prob_f = torch.softmax(out_f, dim=-1).mean(dim=0)
             
-            # Pull predicted indices back to host CPU
             pred_c_idx = torch.argmax(prob_c).item()
             pred_o_idx = torch.argmax(prob_o).item()
             pred_f_idx = torch.argmax(prob_f).item()
             
-            # Map structural taxonomic labels back to string categories
             true_classes.append(le_class.transform([row['Class']])[0])
             true_orders.append(le_order.transform([row['Order']])[0])
             true_families.append(le_family.transform([row['Family']])[0])
@@ -108,7 +100,6 @@ def evaluate_genome_level_soft_voting(model, model_path, test_df, drep_dir, le_c
             pred_orders.append(pred_o_idx)
             pred_families.append(pred_f_idx)
             
-    # Calculate global structural genome-level accuracy scores
     acc_c = accuracy_score(true_classes, pred_classes) * 100
     acc_o = accuracy_score(true_orders, pred_orders) * 100
     acc_f = accuracy_score(true_families, pred_families) * 100
@@ -124,6 +115,7 @@ if __name__ == "__main__":
     METADATA_PATH = os.path.join(DATA_DIR, "metadata.xlsx")
     DREP_DIR = os.path.join(DATA_DIR, "drep_genomes")
     MODEL_SAVE_DIR = "./saved_models"
+    PICTURES_DIR = "./pictures" # Directory pre-created by the user
     
     df = load_metadata(METADATA_PATH)
     _, _, test_df = stratified_split(df)
@@ -133,6 +125,7 @@ if __name__ == "__main__":
     le_family = LabelEncoder().fit(df['Family'])
     
     architectures = ['1d_cnn', 'transformer', 'hyperbolic']
+    raw_metrics = {}
     ablation_records = []
     
     for m_type in architectures:
@@ -141,7 +134,6 @@ if __name__ == "__main__":
             print(f"[WARNING] Model checkpoint missing for {m_type.upper()}. Skipping.")
             continue
             
-        # Dynamically spawn architecture structures
         if m_type == '1d_cnn':
             model = GiantVirus1DCNN(vocab_size=5, num_classes=len(le_class.classes_), num_orders=len(le_order.classes_), num_families=len(le_family.classes_))
         elif m_type == 'transformer':
@@ -153,6 +145,8 @@ if __name__ == "__main__":
             model, model_path, test_df, DREP_DIR, le_class, le_order, le_family, device
         )
         
+        raw_metrics[m_type.upper()] = [acc_class, acc_order, acc_family]
+        
         ablation_records.append({
             "Architecture Backbone": m_type.upper(),
             "Class Accuracy": f"{acc_class:.2f}%",
@@ -160,8 +154,97 @@ if __name__ == "__main__":
             "Family Accuracy": f"{acc_family:.2f}%"
         })
         
-    # Build and print the comprehensive final ablation comparison matrix
+    # --- 1. Print Standard Terminal Report Table ---
     summary_df = pd.DataFrame(ablation_records)
     print("\n" + "="*20 + " FINAL ABLATION STUDY RESULTS (GENOME-LEVEL) " + "="*20)
     print(summary_df.to_markdown(index=False))
     print("="*65)
+    
+    # Global visual constants setup
+    taxonomic_levels = ['Class', 'Order', 'Family']
+    colors = {'1D_CNN': '#1f77b4', 'TRANSFORMER': '#ff7f0e', 'HYPERBOLIC': '#d62728'}
+    
+    # --- 2. Plot Type A: Grouped Bar Chart ---
+    print("\n[Visualization 1/3] Generating Grouped Bar Chart...")
+    x = np.arange(len(taxonomic_levels))
+    bar_width = 0.25
+    fig, ax = plt.subplots(figsize=(10, 6))
+    
+    rects_cnn = ax.bar(x - bar_width, raw_metrics.get('1D_CNN', [0,0,0]), bar_width, label='1D_CNN (Local Motifs)', color=colors['1D_CNN'], edgecolor='black', alpha=0.9)
+    rects_trans = ax.bar(x, raw_metrics.get('TRANSFORMER', [0,0,0]), bar_width, label='TRANSFORMER (Global Attention)', color=colors['TRANSFORMER'], edgecolor='black', alpha=0.9)
+    rects_hype = ax.bar(x + bar_width, raw_metrics.get('HYPERBOLIC', [0,0,0]), bar_width, label='HYPERBOLIC (Hierarchical Ball)', color=colors['HYPERBOLIC'], edgecolor='black', alpha=0.9)
+    
+    ax.set_ylabel('Genome-Level Accuracy (%)', fontsize=12, fontweight='bold')
+    ax.set_title('Ablation Analysis: Quantitative Performance Breakdown', fontsize=13, fontweight='bold', pad=15)
+    ax.set_xticks(x)
+    ax.set_xticklabels(taxonomic_levels, fontsize=11, fontweight='bold')
+    ax.set_ylim(0, 115)
+    ax.grid(axis='y', linestyle='--', alpha=0.5)
+    ax.legend(loc='upper right', fontsize=10)
+    
+    def attach_labels(rects):
+        for rect in rects:
+            height = rect.get_height()
+            ax.annotate(f'{height:.1f}%', xy=(rect.get_x() + rect.get_width() / 2, height),
+                        xytext=(0, 4), textcoords="offset points", ha='center', va='bottom', fontsize=9, fontweight='bold')
+    attach_labels(rects_cnn)
+    attach_labels(rects_trans)
+    attach_labels(rects_hype)
+    
+    plt.tight_layout()
+    plt.savefig(os.path.join(PICTURES_DIR, "ablation_bar_chart.png"), dpi=300)
+    plt.close()
+
+    # --- 3. Plot Type B: Hierarchical Decay Path (Line Plot) ---
+    print("[Visualization 2/3] Generating Taxonomic Decay Trend Plot...")
+    fig, ax = plt.subplots(figsize=(9, 6))
+    
+    for m_type in ['1D_CNN', 'TRANSFORMER', 'HYPERBOLIC']:
+        if m_type in raw_metrics:
+            ax.plot(taxonomic_levels, raw_metrics[m_type], marker='o', markersize=8, linewidth=2.5, 
+                    label=f"{m_type} Resolution Path", color=colors[m_type])
+            for i, val in enumerate(raw_metrics[m_type]):
+                ax.annotate(f'{val:.1f}%', (taxonomic_levels[i], val), textcoords="offset points", 
+                            xytext=(0,10), ha='center', fontsize=9, fontweight='bold', color=colors[m_type])
+                            
+    ax.set_ylabel('Genome-Level Accuracy (%)', fontsize=12, fontweight='bold')
+    ax.set_xlabel('Taxonomic Hierarchy Depth', fontsize=12, fontweight='bold')
+    ax.set_title('Hierarchical Resolution Decay Analysis across Ranks', fontsize=13, fontweight='bold', pad=15)
+    ax.set_ylim(-5, 115)
+    ax.grid(True, linestyle=':', alpha=0.6)
+    ax.legend(loc='lower left', fontsize=10)
+    
+    plt.tight_layout()
+    plt.savefig(os.path.join(PICTURES_DIR, "taxonomic_decay_trend.png"), dpi=300)
+    plt.close()
+
+    # --- 4. Plot Type C: Architectural Performance Radar Chart ---
+    print("[Visualization 3/3] Generating Performance Radar Profile Graph...")
+    categories = ['Class Accuracy', 'Order Accuracy', 'Family Accuracy']
+    num_vars = len(categories)
+    
+    angles = [n / float(num_vars) * 2 * pi for n in range(num_vars)]
+    angles += angles[:1] # Close the circular geometry loop
+    
+    fig, ax = plt.subplots(figsize=(7, 7), subplot_kw=dict(polar=True))
+    
+    plt.xticks(angles[:-1], categories, color='black', size=11, fontweight='bold')
+    ax.set_rlabel_position(30)
+    plt.yticks([25, 50, 75, 100], ["25%", "50%", "75%", "100%"], color="grey", size=9)
+    plt.ylim(0, 105)
+    
+    for m_type in ['1D_CNN', 'TRANSFORMER', 'HYPERBOLIC']:
+        if m_type in raw_metrics:
+            values = raw_metrics[m_type]
+            values_closed = values + values[:1] # Close the circular geometry loop
+            ax.plot(angles, values_closed, linewidth=2, linestyle='solid', label=m_type, color=colors[m_type])
+            ax.fill(angles, values_closed, color=colors[m_type], alpha=0.1)
+            
+    plt.title('Global Architectural Performance Profile Matrix', fontsize=13, fontweight='bold', pad=20)
+    plt.legend(loc='upper right', bbox_to_anchor=(1.2, 1.15), fontsize=10)
+    
+    plt.tight_layout()
+    plt.savefig(os.path.join(PICTURES_DIR, "model_performance_radar.png"), dpi=300)
+    plt.close()
+    
+    print(f"\n[SUCCESS] Execution finished! Three distinct scientific plots are saved in your './pictures' folder.")
